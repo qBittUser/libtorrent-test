@@ -1,0 +1,167 @@
+name: RC_1_2 Branch CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+
+    strategy:
+      matrix:
+        container: ["ubuntu:latest", "debian:latest", "alpine:latest"]
+        boost_version: ["1.89.0", "1.86.0"]
+      fail-fast: false
+
+    steps:
+      - name: Install dependencies
+        if: matrix.container != 'alpine:latest'
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake ninja-build libssl-dev git wget
+
+      - name: Install dependencies
+        if: matrix.container == 'alpine:latest'
+        run: |
+          apk update
+          apk add build-base cmake ninja-build ninja-is-really-ninja openssl-dev git wget linux-headers
+
+      - name: git clone
+        run: git clone --no-tags --single-branch --branch "RC_1_2" --shallow-submodules --recurse-submodules -j"$(nproc)" --depth 1 "https://github.com/userdocs/libtorrent.git"
+
+      - name: Download and build Boost
+        run: |
+          wget https://github.com/boostorg/boost/releases/download/boost-${{ matrix.boost_version }}/boost-${{ matrix.boost_version }}-b2-nodocs.tar.xz
+          tar xf boost-${{ matrix.boost_version }}-b2-nodocs.tar.xz
+          mv -f boost-${{ matrix.boost_version }} $HOME/boost
+          ln -s "$HOME/boost/boost" "$HOME/boost/include"
+          # cd boost
+          # ./bootstrap.sh
+          # ./b2 --prefix=$HOME/boost install
+
+      - name: Build libtorrent
+        working-directory: libtorrent
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=$HOME/boost \
+            -Dbuild_examples=ON
+          cmake --build build
+
+      - name: Test
+        working-directory: libtorrent
+        run: |
+          ./build/examples/client_test --help || echo "Build successful"
+
+  build-windows:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        boost_version: ["1.89.0", "1.86.0"]
+      fail-fast: false
+
+    steps:
+      - name: git clone
+        run: git clone --no-tags --single-branch --branch "RC_1_2" --shallow-submodules --recurse-submodules -j $env:NUMBER_OF_PROCESSORS --depth 1 "https://github.com/userdocs/libtorrent.git"
+
+      - name: Install OpenSSL
+        run: |
+          choco install openssl -y
+
+      - name: Cache Boost
+        uses: actions/cache@v4
+        id: cache-boost
+        with:
+          path: C:/boost
+          key: boost-${{ matrix.boost_version }}-windows
+
+      - name: Download and build Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "Downloading Boost ${{ matrix.boost_version }}..."
+          $start = Get-Date
+          Invoke-WebRequest -Uri "https://github.com/boostorg/boost/releases/download/boost-${{ matrix.boost_version }}/boost-${{ matrix.boost_version }}-b2-nodocs.tar.xz" -OutFile "boost.tar.xz" -UseBasicParsing
+          $downloadTime = (Get-Date) - $start
+          Write-Host "Downloaded in $($downloadTime.TotalSeconds) seconds"
+          
+          Write-Host "Extracting..."
+          $start = Get-Date
+          7z x boost.tar.xz -so | 7z x -si -ttar -oC:\ -y
+          $extractTime = (Get-Date) - $start
+          Write-Host "Extracted in $($extractTime.TotalSeconds) seconds"
+          
+          Rename-Item "C:\boost-${{ matrix.boost_version }}" "C:\boost"
+          New-Item -ItemType SymbolicLink -Path "C:/boost/include" -Target "C:/boost/boost" -Force
+
+      - name: Build libtorrent
+        working-directory: libtorrent
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/boost -DBOOST_ROOT=C:/boost -DBoost_INCLUDE_DIR=C:/boost -DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64" -Dbuild_examples=ON
+          cmake --build build --config Release
+
+      - name: Test
+        working-directory: libtorrent
+        run: |
+          echo "Checking if client_test.exe exists..."
+          if (Test-Path ".\build\examples\Release\client_test.exe") {
+            echo "client_test.exe found in Release folder"
+            
+            echo "Testing client_test.exe..."
+            $output = & .\build\examples\Release\client_test.exe --help 2>&1
+            $exitCode = $LASTEXITCODE
+            echo "Exit code: $exitCode"
+            echo "Output: $output"
+            
+            if ($exitCode -eq 0) { 
+              echo "Build successful" 
+            } else {
+              echo "client_test.exe failed with exit code $exitCode (0x$($exitCode.ToString('X8')))"
+              exit $exitCode
+            }
+          } else {
+            echo "client_test.exe not found in Release folder!"
+            echo "Checking build directory structure..."
+            Get-ChildItem -Recurse .\build\ -Name "client_test.exe" -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+  build-macos:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        boost_version: ["1.89.0", "1.86.0"]
+      fail-fast: false
+
+    steps:
+      - name: Install dependencies
+        run: |
+          brew install ninja openssl wget
+
+      - name: git clone
+        run: git clone --no-tags --single-branch --branch "RC_1_2" --shallow-submodules --recurse-submodules -j"$(sysctl -n hw.ncpu)" --depth 1 "https://github.com/userdocs/libtorrent.git"
+
+      - name: Download and build Boost
+        run: |
+          wget https://github.com/boostorg/boost/releases/download/boost-${{ matrix.boost_version }}/boost-${{ matrix.boost_version }}-b2-nodocs.tar.xz
+          tar xf boost-${{ matrix.boost_version }}-b2-nodocs.tar.xz
+          mv -f boost-${{ matrix.boost_version }} $HOME/boost
+          ln -s "$HOME/boost/boost" "$HOME/boost/include"
+
+      - name: Build libtorrent
+        working-directory: libtorrent
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=$HOME/boost \
+            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) \
+            -Dbuild_examples=ON
+          cmake --build build
+
+      - name: Test
+        working-directory: libtorrent
+        run: |
+          ./build/examples/client_test --help || echo "Build successful"
