@@ -55,7 +55,7 @@ jobs:
           ./build/examples/client_test --help || echo "Build successful"
 
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     strategy:
       matrix:
@@ -129,7 +129,7 @@ jobs:
           }
 
   build-macos:
-    runs-on: macos-14
+    runs-on: macos-15
 
     strategy:
       matrix:
